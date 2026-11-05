@@ -1,0 +1,60 @@
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && firestore.get(
+          /databases/(default)/documents/users/$(request.auth.uid)
+        ).data.role == 'admin';
+    }
+
+    // =========================
+    // PRODUCT IMAGES
+    // =========================
+    match /products/{fileName} {
+
+      allow read: if true;
+
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================
+    // PAYMENT PROOFS
+    // =========================
+    match /payments/{userId}/{orderId}/{fileName} {
+
+      // Pemilik pesanan dan admin dapat melihat bukti pembayaran.
+      allow read: if signedIn()
+        && (
+          request.auth.uid == userId
+          || isAdmin()
+        );
+
+      // Customer hanya dapat mengunggah file untuk pesanannya sendiri.
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && firestore.get(
+          /databases/(default)/documents/orders/$(orderId)
+        ).data.userId == userId
+        && request.resource != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches(
+          'image/(jpeg|png|webp)|application/pdf'
+        );
+
+      // Penghapusan file dipisahkan dari upload.
+      allow delete: if signedIn()
+        && (
+          request.auth.uid == userId
+          || isAdmin()
+        );
+    }
+  }
+}

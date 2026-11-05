@@ -1,0 +1,149 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // =========================
+    // USERS / PROFILE
+    // =========================
+    match /users/{userId} {
+
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'customer';
+
+      allow read: if signedIn()
+        && (request.auth.uid == userId || isAdmin());
+
+      allow update: if signedIn()
+        && (
+          (
+            request.auth.uid == userId
+            && request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'fullname',
+                'nama',
+                'username',
+                'phoneNumber',
+                'address',
+                'updatedAt'
+              ])
+          )
+          || isAdmin()
+        );
+
+      allow delete: if isAdmin();
+
+      // CART
+      match /cart/{itemId} {
+        allow read, delete: if signedIn()
+          && request.auth.uid == userId;
+
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.quantity is int
+          && request.resource.data.quantity >= 1
+          && request.resource.data.quantity <= 5;
+      }
+
+      // WISHLIST
+      match /wishlist/{itemId} {
+        allow read, write: if signedIn()
+          && request.auth.uid == userId;
+      }
+    }
+
+    // =========================
+    // PRODUCTS
+    // =========================
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // =========================
+    // ORDERS
+    // =========================
+    match /orders/{orderId} {
+
+      // Customer hanya membuat pesanan atas namanya sendiri.
+      // Status awal harus menunggu pembayaran.
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'Waiting Payment';
+
+      // Customer hanya membaca pesanannya sendiri.
+      // Admin bisa membaca seluruh pesanan.
+      allow read: if signedIn()
+        && (
+          resource.data.userId == request.auth.uid
+          || isAdmin()
+        );
+
+      // Admin dapat mengelola pesanan.
+      // Customer hanya dapat mengirim bukti pembayaran.
+      allow update: if signedIn()
+        && (
+          isAdmin()
+          || (
+            resource.data.userId == request.auth.uid
+            && resource.data.status in [
+              'Waiting Payment',
+              'Rejected'
+            ]
+            && request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasOnly([
+                'paymentProof',
+                'status',
+                'updatedAt'
+              ])
+            && request.resource.data.status == 'Payment Verification'
+            && request.resource.data.paymentProof is string
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================
+    // REVIEWS
+    // =========================
+    match /reviews/{reviewId} {
+
+      allow read: if true;
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn()
+        && (
+          isAdmin()
+          || (
+            resource.data.userId == request.auth.uid
+            && !request.resource.data.diff(resource.data)
+              .affectedKeys()
+              .hasAny(['userId'])
+          )
+        );
+
+      allow delete: if signedIn()
+        && (
+          resource.data.userId == request.auth.uid
+          || isAdmin()
+        );
+    }
+  }
+}
